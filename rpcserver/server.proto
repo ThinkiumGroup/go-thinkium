@@ -1,0 +1,128 @@
+syntax = "proto3";
+
+package rpcserver;
+
+service node {
+    rpc Ping(RpcRequest) returns (RpcResponse);
+    rpc GetAccount(RpcAddress) returns (RpcResponse);
+    rpc GetTransactionByHash(RpcTXHash) returns (RpcResponse);
+    rpc GetTransactions(RpcTxList) returns (RpcResponse);
+    rpc SendTx(RpcTx) returns (RpcResponse);
+    rpc GetStats(RpcStatsReq) returns (RpcResponse);
+    rpc GetBlockHeader(RpcBlockHeight) returns (RpcResponse);
+    rpc GetBlock(RpcBlockHeight) returns (RpcRespondStream);
+    rpc GetBlockHeaders(RpcBlockHeight) returns (RpcResponse);
+    rpc GetBlockTxs(RpcBlockTxsReq) returns (RpcResponse);
+    rpc CallTransaction(RpcTx) returns (RpcResponse);
+    rpc GetChainInfo(RpcChainInfoReq) returns (RpcResponse);
+    rpc GetCommittee(RpcChainEpoch) returns (RpcResponse);
+    rpc MakeVccProof(RpcCashCheck) returns (RpcResponse);
+    rpc MakeCCCExistenceProof(RpcCashCheck) returns (RpcResponse);
+    rpc GetCCCRelativeTx(RpcCashCheck) returns (RpcResponse);
+    rpc GetAccountWithChainHeight(RpcAddress) returns (RpcResponse);
+    rpc GetRRProofs(RpcRRProofReq) returns (RpcResponse);
+    rpc GetRRCurrent(RpcChainRequest) returns (RpcResponse);
+    rpc SendBlock(RpcMsgReq) returns (RpcResponse);
+    rpc TryCrypto(RpcMsgReq) returns (RpcResponse);
+}
+
+message RpcChainInfoReq {
+    repeated uint32 chainid = 1;
+}
+
+message RpcAddress {
+    uint32 chainid = 1;
+    bytes address = 2;
+}
+message RpcTXHash {
+    uint32 chainid = 1;
+    bytes hash = 2;
+}
+message RpcTxList {
+    uint32 chainid = 1;
+    RpcAddress address = 2;
+    uint32 startHeight = 3; // include
+    uint32 endHeight = 4; // exclude
+}
+
+message RpcTx {
+    uint32 chainid = 1;
+    RpcAddress from = 2;
+    RpcAddress to = 3;
+    uint64 nonce = 4;
+    string val = 5;
+    bytes input = 6;
+    bytes pub = 7;
+    bytes sig = 8;
+    bool uselocal = 9;
+    bytes extra = 10;
+    repeated bytes multipubs = 11;
+    repeated bytes multisigs = 12;
+}
+
+message RpcStatsReq {
+    uint32 chainid = 1;
+}
+
+message RpcRequest {
+    string data = 1;
+}
+
+message RpcChainRequest {
+    uint32 chainid = 1;
+}
+
+message RpcResponse {
+    int32 code = 1;
+    string data = 2;
+}
+
+message RpcBlockHeight {
+    uint32 chainid = 1;
+    uint64 height = 2;
+}
+
+message RpcChainEpoch {
+    uint32 chainid = 1;
+    uint64 epoch = 2;
+}
+
+
+message RpcBlockTxsReq {
+    uint32 chainid = 1;
+    uint64 height = 2;
+    int32 page = 3;
+    int32 size = 4;
+}
+
+message RpcCashCheck {
+    uint32 chainid = 1;
+    RpcAddress from = 2;
+    RpcAddress to = 3;
+    uint64 nonce = 4;
+    uint64 expireHeight = 5;
+    string amount = 6;
+    bool uselocal = 7;
+    uint32 parentChain = 8;
+    bool   isShard  = 9;
+    int32 currencyId = 10;
+}
+
+message RpcRRProofReq {
+    uint32 chainId = 1;
+    bytes rootHash = 3;
+    bytes nodeHash = 4;
+    bytes pub = 5;
+    bytes sig = 6;
+}
+
+message RpcMsgReq {
+    uint32 type = 1;
+    bytes  msg = 2;
+}
+
+message RpcRespondStream {
+    int32 code = 1;
+    string msg = 2;
+    bytes stream = 3;
+}
