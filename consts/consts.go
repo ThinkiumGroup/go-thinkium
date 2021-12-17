@@ -14,8 +14,10 @@
 
 package consts
 
+import "github.com/ThinkiumGroup/go-common/log"
+
 const (
-	Version = "V2.9.16_free" // node version
+	Version = "V2.10.4_free" // node version
 
 	// consensus related constants
 	MinimumCommSize        = 4   // bft 3f+1. If you want to have one fault tolerance, you need at least 3*1+1=4 nodes, and there is no fault tolerance below 3 nodes
@@ -43,3 +45,7 @@ const (
 	P2PNeedMAC = true // whether network message need MAC verification
 	P2PMacLen  = 3
 )
+
+func init() {
+	log.Infof("Version: %s", Version)
+}

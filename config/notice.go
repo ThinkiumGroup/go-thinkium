@@ -39,6 +39,9 @@ type NoticeConf struct {
 }
 
 func (n *NoticeConf) Validate() error {
+	if n == nil {
+		return nil
+	}
 	if n.ChainID == nil {
 		return errors.New("NoticeConf.chainid must be set")
 	} else {

@@ -39,6 +39,9 @@ type ChainConf struct {
 }
 
 func (c *ChainConf) Validate() error {
+	if c == nil {
+		return nil
+	}
 	if c.ElectType.IsVrf() == false {
 		return errors.New("only VRF(1) ElectType supported")
 	}
@@ -74,6 +77,9 @@ func (c *ChainConf) String() string {
 type ChainConfs []*ChainConf
 
 func (cc ChainConfs) Validate() error {
+	if cc == nil {
+		return nil
+	}
 	for i := 0; i < len(cc); i++ {
 		if err := cc[i].Validate(); err != nil {
 			return err

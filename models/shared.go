@@ -22,6 +22,7 @@ import (
 	"github.com/ThinkiumGroup/go-common/log"
 	"github.com/ThinkiumGroup/go-common/trie"
 	"github.com/ThinkiumGroup/go-thinkium/config"
+	"github.com/sirupsen/logrus"
 )
 
 var VMPlugin *plugin.Plugin
@@ -35,12 +36,12 @@ func NewConsensusEngine(enginePlug *plugin.Plugin, eventer Eventer, nmanager Net
 	return NewEngine.(func(Eventer, NetworkManager, DataManager, *config.Config) Engine)(eventer, nmanager, dmanager, conf)
 }
 
-func NewEventer(eventerPlug *plugin.Plugin, queueSize, barrelSize, workerSize int, shutingdownFunc func()) Eventer {
+func NewEventer(eventerPlug *plugin.Plugin, queueSize, barrelSize, workerSize int, shutingdownFunc func(), isInComm IsInCommitteeFunc) Eventer {
 	NewEventController, err := eventerPlug.Lookup("NewEventController")
 	if err != nil {
 		panic(err)
 	}
-	return NewEventController.(func(int, int, int, func()) Eventer)(queueSize, barrelSize, workerSize, shutingdownFunc)
+	return NewEventController.(func(int, int, int, func(), IsInCommitteeFunc) Eventer)(queueSize, barrelSize, workerSize, shutingdownFunc, isInComm)
 }
 
 func NewDManager(dataPlugin *plugin.Plugin, path string, eventer Eventer) (DataManager, error) {
@@ -80,6 +81,16 @@ func LoadNoticer(sopath string, queueSize int, chainID common.ChainID, redisAddr
 		return nil
 	}
 	return m(queueSize, chainID, redisAddr, redisPwd, redisDB, redisQueue)
+}
+
+type IsInCommitteeFunc func(DataManager, common.Seed, [32]byte, common.ChainID, *RRInfo, byte, logrus.FieldLogger) bool
+
+func LocateIsInCommittee(consensusPlugin *plugin.Plugin) IsInCommitteeFunc {
+	iicf, err := consensusPlugin.Lookup("IsInCommittee")
+	if err != nil {
+		panic(err)
+	}
+	return iicf.(func(DataManager, common.Seed, [32]byte, common.ChainID, *RRInfo, byte, logrus.FieldLogger) bool)
 }
 
 type ChainStats struct {

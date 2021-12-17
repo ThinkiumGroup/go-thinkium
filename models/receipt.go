@@ -64,10 +64,10 @@ type Log struct {
 	TxHash common.Hash `json:"transactionHash" gencodec:"required"`
 	// index of the transaction in the block
 	TxIndex uint `json:"transactionIndex" gencodec:"required"`
-	// // hash of the block in which the transaction was included
-	// BlockHash common.Hash `json:"blockHash"`
 	// index of the log in the receipt
 	Index uint `json:"logIndex" gencodec:"required"`
+	// hash of the block in which the transaction was included
+	BlockHash *common.Hash `json:"blockHash"`
 }
 
 type logMarshaling struct {

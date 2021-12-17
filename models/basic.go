@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -32,6 +33,7 @@ import (
 	"github.com/ThinkiumGroup/go-common/math"
 	"github.com/ThinkiumGroup/go-common/trie"
 	"github.com/ThinkiumGroup/go-thinkium/consts"
+	"github.com/stephenfire/go-rtl"
 )
 
 type BlockHeighter interface {
@@ -52,18 +54,137 @@ type Transaction struct {
 	Extra     hexutil.Bytes   `json:"extra"`     // Store transaction additional information
 	Version   uint16          `json:"version"`   // Version number used to distinguish different execution methods when the transaction execution is incompatible due to upgrade
 	MultiSigs PubAndSigs      `json:"multiSigs"` // The signatures used to sign this transaction will only be used when there are multiple signatures. The signature of the transaction sender is not here. Not included in Hash
+	_cache    *Extra
+}
+
+type Extra struct {
+	Type       byte     `json:"type"`
+	Gas        uint64   `json:"gas"`
+	GasPrice   *big.Int `json:"gasPrice"` // wei per gas
+	GasTipCap  *big.Int
+	GasFeeCap  *big.Int
+	AccessList AccessList
+	V, R, S    *big.Int
+	TkmExtra   []byte
+}
+
+func (x *Extra) SetTkmExtra(extra []byte) error {
+	if len(extra) == 0 {
+		x.TkmExtra = nil
+		return nil
+	}
+	var inputExtra map[string]interface{}
+	if err := json.Unmarshal(extra, &inputExtra); err != nil {
+		return fmt.Errorf("unmarshal extra failed: %v", err)
+	}
+	if gas, ok := inputExtra["gas"]; ok {
+		x.Gas = uint64(gas.(float64))
+		if len(inputExtra) == 1 {
+			// "gas" only
+			x.TkmExtra = nil
+			return nil
+		}
+	}
+	x.TkmExtra = extra
+	return nil
+}
+
+func (x *Extra) String() string {
+	if x == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("{type:%d gas:%d gasPrice:%s GasTipCap:%s GasFeeCap:%s AccessList:%v V:%s R:%s S:%s TkmExtra:%s}",
+		x.Type, x.Gas, math.BigIntForPrint(x.GasPrice), math.BigIntForPrint(x.GasTipCap), math.BigIntForPrint(x.GasFeeCap),
+		x.AccessList, math.BigIntForPrint(x.V), math.BigIntForPrint(x.R), math.BigIntForPrint(x.S), string(x.TkmExtra))
+}
+
+// EthKeys Type returns the ethtransaction type.
+func (tx *Transaction) ExtraKeys() (extra *Extra) {
+	if tx._cache != nil {
+		return tx._cache
+	}
+	defer func() {
+		tx._cache = extra
+	}()
+	extra = &Extra{Type: LegacyTxType}
+	if len(tx.Extra) == 0 {
+		return extra
+	}
+	if tx.Version < ETHHashTxVersion {
+		extra.SetTkmExtra(tx.Extra)
+		return extra
+	}
+	_ = json.Unmarshal(tx.Extra, extra)
+	return extra
+}
+
+func (tx *Transaction) SetExtraKeys(extras *Extra) error {
+	if extrabs, err := json.Marshal(extras); err != nil {
+		return fmt.Errorf("marshal extraKeys failed: %v", err)
+	} else {
+		tx.Extra = extrabs
+		tx._cache = nil
+	}
+	return nil
+}
+
+func (tx *Transaction) SetTkmExtra(extra []byte) error {
+	if len(extra) == 0 {
+		return nil
+	}
+	extras := tx.ExtraKeys()
+	extras.SetTkmExtra(extra)
+	return tx.SetExtraKeys(extras)
+}
+
+func (tx *Transaction) GetTkmExtra() []byte {
+	if tx.Version < ETHHashTxVersion {
+		return tx.Extra
+	}
+	if len(tx.Extra) == 0 {
+		return nil
+	}
+	return tx.ExtraKeys().TkmExtra
+}
+
+func (tx *Transaction) RawSignatureValues() (v, r, s *big.Int) {
+	ethkeys := tx.ExtraKeys()
+	return ethkeys.V, ethkeys.R, ethkeys.S
+}
+
+// Type returns the ethtransaction type of tx.
+func (tx *Transaction) Type() byte {
+	return tx.ExtraKeys().Type
+}
+
+func (tx *Transaction) GasPrice() *big.Int {
+	return tx.ExtraKeys().GasPrice
+}
+
+func (tx *Transaction) GasTipCap() *big.Int {
+	return tx.ExtraKeys().GasTipCap
+}
+
+func (tx *Transaction) GasFeeCap() *big.Int {
+	return tx.ExtraKeys().GasFeeCap
+}
+
+func (tx *Transaction) Gas() uint64 {
+	return tx.ExtraKeys().Gas
+}
+
+func (tx *Transaction) AccessList() AccessList {
+	return tx.ExtraKeys().AccessList
 }
 
 func (tx *Transaction) Clone() *Transaction {
-	from := common.BytesToAddress(tx.From[:])
-	to := common.BytesToAddress(tx.To[:])
 	return &Transaction{
 		ChainID:   tx.ChainID,
-		From:      &from,
-		To:        &to,
+		From:      tx.From.Clone(),
+		To:        tx.To.Clone(),
 		Nonce:     tx.Nonce,
 		UseLocal:  tx.UseLocal,
-		Val:       new(big.Int).Set(tx.Val),
+		Val:       math.CopyBigInt(tx.Val),
 		Input:     common.CopyBytes(tx.Input),
 		Extra:     common.CopyBytes(tx.Extra),
 		Version:   tx.Version,
@@ -86,19 +207,81 @@ func (tx Transaction) FullString() string {
 	if tx.Extra != nil {
 		extra = string(tx.Extra)
 	}
-	return fmt.Sprintf("Tx.%d{ChainID:%d From:%v To:%v Nonce:%d UseLocal:%t Val:%s Input:%s Extra:%s MSigs:%s}",
-		tx.Version, tx.ChainID, tx.From, tx.To, tx.Nonce, tx.UseLocal, math.BigIntForPrint(tx.Val), input, extra, tx.MultiSigs)
+	return fmt.Sprintf("Tx.%d{ChainID:%d From:%v To:%v Nonce:%d UseLocal:%t Val:%s Input:%s ExtraStr:%s Extras:%s MSigs:%s}",
+		tx.Version, tx.ChainID, tx.From, tx.To, tx.Nonce, tx.UseLocal, math.BigIntForPrint(tx.Val), input, extra, tx.ExtraKeys(), tx.MultiSigs)
 }
 
 func (tx Transaction) GetChainID() common.ChainID {
 	return tx.ChainID
 }
 
+func _uint2bigint(ui64 uint64) *big.Int {
+	bs := rtl.Numeric.UintToBytes(ui64)
+	return new(big.Int).SetBytes(bs)
+}
+
+func ETHChainID(tkmChainID common.ChainID, txVersion uint16) uint64 {
+	if tkmChainID.IsNil() {
+		return uint64(tkmChainID)
+	}
+	if txVersion > ETHHashTxVersion {
+		return uint64(tkmChainID) + common.BigChainIDBase
+	} else if txVersion == ETHHashTxVersion {
+		return uint64(tkmChainID) + common.BigChainIDBaseV2
+	} else {
+		return uint64(tkmChainID)
+	}
+}
+
+func ETHChainIDBig(tkmChainID common.ChainID, txVersion uint16) *big.Int {
+	if tkmChainID.IsNil() {
+		return nil
+	}
+	return _uint2bigint(ETHChainID(tkmChainID, txVersion))
+}
+
+func FromETHChainID(ethChainId *big.Int) (common.ChainID, error) {
+	if ethChainId == nil {
+		return common.NilChainID, errors.New("nil chain id")
+	}
+	if !ethChainId.IsUint64() {
+		return common.NilChainID, errors.New("chain id not available")
+	}
+	ethcid := ethChainId.Uint64()
+	maxChainID := uint64(math.MaxUint32) + common.BigChainIDBase
+	if ethcid > maxChainID || ethcid < common.BigChainIDBase {
+		return common.NilChainID, errors.New("chain id out of range")
+	}
+	cid := ethcid - common.BigChainIDBase
+	return common.ChainID(cid), nil
+}
+
+func (tx *Transaction) ETHChainID() *big.Int {
+	if tx == nil {
+		return nil
+	}
+	return _uint2bigint(ETHChainID(tx.ChainID, tx.Version))
+}
+
 func (tx *Transaction) Hash() common.Hash {
-	return common.EncodeHash(tx)
+	if tx.Version >= ETHHashTxVersion {
+		return ETHSigner.HashGtkmWithSig(tx)
+	}
+
+	hasher := common.RealCipher.Hasher()
+	p := TransactionStringForHash(tx.ChainID, tx.From, tx.To, tx.Nonce, tx.UseLocal, tx.Val, tx.Input, tx.Extra)
+	if _, err := hasher.Write([]byte(p)); err != nil {
+		return common.Hash{}
+	}
+	return common.BytesToHash(hasher.Sum(nil))
 }
 
 func (tx Transaction) HashValue() ([]byte, error) {
+	if tx.Version >= ETHHashTxVersion {
+		hoe := ETHSigner.HashGtkm(&tx)
+		return hoe.Slice(), nil
+	}
+
 	hasher := common.RealCipher.Hasher()
 	p := TransactionStringForHash(tx.ChainID, tx.From, tx.To, tx.Nonce, tx.UseLocal, tx.Val, tx.Input, tx.Extra)
 	if _, err := hasher.Write([]byte(p)); err != nil {
@@ -107,7 +290,7 @@ func (tx Transaction) HashValue() ([]byte, error) {
 	return hasher.Sum(nil), nil
 }
 
-// TODO delete compatible when restart the chain with new version
+// DeprecatedHash TODO delete compatible when restart the chain with new version
 // Deprecated
 func (tx Transaction) DeprecatedHash() ([]byte, error) {
 	var t string
@@ -186,7 +369,7 @@ func (r *CommReport) Hash() common.Hash {
 	return common.EncodeHash(r)
 }
 
-// report of Block
+// BlockReport report of Block
 type BlockReport struct {
 	ToChainId   common.ChainID
 	BlockHeader *BlockHeader    // the header of the reporting block
@@ -341,7 +524,7 @@ func (s *HeaderSummary) Find(chainId common.ChainID, height common.Height) (inde
 	return
 }
 
-// Get the proof from a packaged HeaderSummary in the current block to the hash of this block
+// HeaderProof Get the proof from a packaged HeaderSummary in the current block to the hash of this block
 func (s *HeaderSummary) HeaderProof(hashOfHeader []byte, proofChain *trie.ProofChain) ([]byte, error) {
 	if len(s.Summaries) == 0 {
 		return nil, errors.New("no summary found")
@@ -496,7 +679,7 @@ func checkBlockHashs(name string, fromHeader *common.Hash, fromBody func() (*com
 	return nil
 }
 
-// Recalculate and verify the data in the header according to the body data, and return the
+// CheckHashs Recalculate and verify the data in the header according to the body data, and return the
 // corresponding error if it fails
 func (b *BlockEMessage) CheckHashs() error {
 	// AttendanceHash
@@ -580,6 +763,13 @@ func (h *BlockHeader) GetHistoryRoot() []byte {
 		return nil
 	}
 	return h.HashHistory[:]
+}
+
+func (h *BlockHeader) Era() common.EraNum {
+	if !h.ChainID.IsMain() {
+		return h.ParentHeight.EraNum()
+	}
+	return h.Height.EraNum()
 }
 
 func hashPointerHash(h *common.Hash) []byte {
@@ -775,7 +965,7 @@ func (h *BlockHeader) HashValue() ([]byte, error) {
 	return ret, err
 }
 
-// generate proof from a specified field to block hash
+// Proof generate proof from a specified field to block hash
 func (h *BlockHeader) Proof(typ trie.ProofType) (hashOfHeader []byte, indexHash *common.Hash, proof *common.MerkleProofs, err error) {
 	if h == nil {
 		return nil, nil, nil, common.ErrNil
@@ -1103,7 +1293,6 @@ type Committee struct {
 	indexLock sync.Mutex
 }
 
-// func NewCommittee(id *common.NodeID) *Committee {
 func NewCommittee() *Committee {
 	return &Committee{
 		Members: make([]common.NodeID, 0),
@@ -1150,7 +1339,7 @@ func (c *Committee) Equals(o *Committee) bool {
 	if c == nil || o == nil {
 		return false
 	}
-	return common.NodeIDs(c.Members).Equals(common.NodeIDs(o.Members))
+	return common.NodeIDs(c.Members).Equals(o.Members)
 }
 
 func (c *Committee) Clone() *Committee {
@@ -1341,7 +1530,7 @@ func (c *ChainEpochCommittee) String() string {
 	return fmt.Sprintf("CEComm{ChainID:%d Epoch:%d Comm:%s}", c.ChainID, c.Epoch, c.Comm)
 }
 
-// Transaction index
+// TXIndex Transaction index
 type TXIndex struct {
 	BlockHeight uint64
 	BlockHash   common.Hash
@@ -1363,7 +1552,7 @@ func (i *TXIndex) String() string {
 	return fmt.Sprintf("TXIndex{Height:%d Hash:%s Index:%d}", i.BlockHeight, i.BlockHash, i.Index)
 }
 
-// EVM message
+// Message EVM message
 type Message struct {
 	to         *common.Address
 	from       common.Address
@@ -1374,13 +1563,14 @@ type Message struct {
 	gasPrice   *big.Int
 	data       []byte
 	checkNonce bool
+	bodyhash   common.Hash
 	txhash     common.Hash
 	senderSig  *PubAndSig
 	multiSigs  PubAndSigs
 	version    uint16
 }
 
-func NewMessage(txhash common.Hash, from common.Address, to *common.Address, nonce uint64, useLocal bool,
+func NewMessage(bodyhash common.Hash, txhash common.Hash, from common.Address, to *common.Address, nonce uint64, useLocal bool,
 	amount *big.Int, gasLimit uint64, gasPrice *big.Int, data []byte, checkNonce bool, senderSig *PubAndSig,
 	multiSigs PubAndSigs, version uint16) Message {
 	return Message{
@@ -1393,6 +1583,7 @@ func NewMessage(txhash common.Hash, from common.Address, to *common.Address, non
 		gasPrice:   gasPrice,
 		data:       data,
 		checkNonce: checkNonce,
+		bodyhash:   bodyhash,
 		txhash:     txhash,
 		senderSig:  senderSig,
 		multiSigs:  multiSigs,
@@ -1414,7 +1605,7 @@ func (m Message) Sig() *PubAndSig       { return m.senderSig }
 func (m Message) MultiSigs() PubAndSigs { return m.multiSigs }
 func (m Message) Version() uint16       { return m.version }
 
-// Traverse all the valid signatures without repetition, call the callback method, and return
+// AllValidSigns Traverse all the valid signatures without repetition, call the callback method, and return
 // the map with the key as the public key of the valid signature
 func (m Message) AllValidSigns(callback func(pas *PubAndSig)) map[string]struct{} {
 	r := make(map[string]struct{}, len(m.multiSigs)+1)
@@ -1433,7 +1624,7 @@ func (m Message) AllValidSigns(callback func(pas *PubAndSig)) map[string]struct{
 		if exist {
 			continue
 		}
-		if common.VerifyHash(m.txhash[:], sig.PublicKey, sig.Signature) {
+		if common.VerifyHash(m.bodyhash[:], sig.PublicKey, sig.Signature) {
 			r[string(sig.PublicKey)] = struct{}{}
 			if callback != nil {
 				callback(sig)
@@ -1443,12 +1634,12 @@ func (m Message) AllValidSigns(callback func(pas *PubAndSig)) map[string]struct{
 	return r
 }
 
-// Returns an unordered list of all correctly signed public keys
+// SignedPubs Returns an unordered list of all correctly signed public keys
 func (m Message) SignedPubs() map[string]struct{} {
 	return m.AllValidSigns(nil)
 }
 
-// Returns the unordered list of addresses corresponding to all correctly signed public keys
+// SignedAddresses Returns the unordered list of addresses corresponding to all correctly signed public keys
 func (m Message) SignedAddresses() map[common.Address]struct{} {
 	r := make(map[common.Address]struct{}, len(m.multiSigs)+1)
 	m.AllValidSigns(func(pas *PubAndSig) {
@@ -1461,7 +1652,7 @@ func (m Message) SignedAddresses() map[common.Address]struct{} {
 	return r
 }
 
-// Cursor information used to record blocks, including block height and block hash
+// BlockCursor Cursor information used to record blocks, including block height and block hash
 type BlockCursor struct {
 	Height common.Height
 	Hash   []byte

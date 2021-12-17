@@ -132,7 +132,8 @@ type Config struct {
 	PrivKey      cipher.ECCPrivateKey `yaml:"-"`           // The private key object obtained by parsing PriKeyString
 	StandAlone   bool                 `yaml:"standAlone"`  // whether start in single chain mode
 	Noticer      *NoticeConf          `yaml:"notice"`
-	Starter      *Starter             `yaml:"starter"` // starter private key
+	Starter      *Starter             `yaml:"starter"`  // starter private key
+	Releases     ReleaseDefs          `yaml:"releases"` // release definations
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -181,9 +182,9 @@ func (c *Config) validate() error {
 	for i := 0; i < typ.NumField(); i++ {
 		f := typ.Field(i)
 		if f.Type.Implements(validatorInterface) {
-			if val.FieldByName(f.Name).IsNil() {
-				continue
-			}
+			// if val.FieldByName(f.Name).IsNil() {
+			// 	continue
+			// }
 			validator := val.FieldByName(f.Name).Interface().(ConfValidator)
 			if validator != nil {
 				err = validator.Validate()

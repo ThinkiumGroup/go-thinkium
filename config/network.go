@@ -18,10 +18,15 @@ import (
 	"github.com/ThinkiumGroup/go-common"
 )
 
+var (
+	DefaultEthRpcEndpoint = common.Endpoint{NetType: "tcp", Address: common.DefaultEthRpcAddress}
+)
+
 type NConfig struct {
 	DataServers []common.Dataserver `yaml:"bootservers" json:"bootservers"`
 	P2Ps        *P2PConfig          `yaml:"p2p",omitempty json:"p2p"`
 	RPCs        *RPCConfig          `yaml:"rpc",omitempty json:"rpc"`
+	ETHRPC      *ETHRPCConfig       `yaml:"ethrpc",omitempty json:"ethrpc"`
 	Pprof       *string             `yaml:"pprof",omitempty json:"pprof"`
 
 	DataServerMap map[common.NodeID][]common.Dataserver `yaml:"-" json:"-"` // nodeid -> []Dataserver
@@ -56,4 +61,17 @@ func (rpc *RPCConfig) GetRpcAddress() string {
 		return common.DefaultRpcAddress
 	}
 	return rpc.RPCServerAddr.Address
+}
+
+type ETHRPCConfig struct {
+	MessageBufferSize uint16           `yaml:"buffersize" json:"-"`
+	KeepaliveInterval int64            `yaml:"keepaliveinterval" json:"-"`
+	EthRPCServerAddr  *common.Endpoint `yaml:"ethrpcserver" json:"ethrpcserver"`
+}
+
+func (rpc *ETHRPCConfig) GetRpcEndpoint() common.Endpoint {
+	if rpc == nil || rpc.EthRPCServerAddr == nil {
+		return DefaultEthRpcEndpoint
+	}
+	return *rpc.EthRPCServerAddr
 }

@@ -26,7 +26,6 @@ import (
 	"github.com/ThinkiumGroup/go-common"
 	"github.com/ThinkiumGroup/go-common/hexutil"
 	"github.com/ThinkiumGroup/go-common/log"
-	"github.com/ThinkiumGroup/go-common/math"
 	"github.com/ThinkiumGroup/go-thinkium/config"
 	"github.com/ThinkiumGroup/go-thinkium/consts"
 	"github.com/ThinkiumGroup/go-thinkium/models"
@@ -181,7 +180,7 @@ func (s *RPCServer) GetAccount(ctx context.Context, addr *RpcAddress) (*RpcRespo
 	}
 }
 
-// Get account information and current chain height
+// GetAccountWithChainHeight Get account information and current chain height
 func (s *RPCServer) GetAccountWithChainHeight(ctx context.Context, addr *RpcAddress) (*RpcResponse, error) {
 	if addr == nil {
 		return newResponse(InvalidParamsCode, "nil request"), nil
@@ -257,91 +256,187 @@ func txToAccountChange(header *models.BlockHeader, height common.Height, tx *mod
 		UseLocal:  tx.UseLocal,
 		Extra:     tx.Extra,
 		TimeStamp: header.TimeStamp,
+		Version:   tx.Version,
 	}
 }
 
-func checkRpcTx(tx *RpcTx, verifySig bool) (hoe []byte, txmsg *models.Transaction, resp *RpcResponse) {
-	if tx == nil {
-		return nil, nil, newResponse(InvalidParamsCode, "nil tx")
-	}
-	if tx.From == nil || len(tx.From.Address) != common.AddressLength {
-		return nil, nil, newResponse(InvalidParamsCode, "illegal from address")
-	}
-	if len(tx.Multipubs) != len(tx.Multisigs) {
-		return nil, nil, newResponse(InvalidParamsCode, "multipubs and multisigs not match")
-	}
+func checkRpcTx(tx *RpcTx, verifySig bool) (txmsg *models.Transaction, resp *RpcResponse) {
 
-	if tx.Chainid == uint32(common.MainChainID) {
+	var err error
+	txmsg, err = tx.ToTx()
+	if err != nil {
+		return nil, newResponse(InvalidParamsCode, err.Error())
+	}
+	if txmsg.ChainID.IsMain() {
 		// Only system contracts can be called on the main chain
-		if tx.To == nil || len(tx.To.Address) == 0 || !common.BytesToAddress(tx.To.Address).IsSystemContract() {
-			return nil, nil, newResponse(InvalidBCCode)
+		if txmsg.To == nil || !txmsg.To.IsSystemContract() {
+			return nil, newResponse(InvalidBCCode)
 		}
 	}
-
+	if txmsg.From != nil && txmsg.From.IsReserved() {
+		return nil, newResponse(ReservedFromAddrErrCode)
+	}
+	if len(txmsg.Input) == 0 && (txmsg.Val == nil || txmsg.Val.Sign() == 0) {
+		return nil, newResponse(InvalidParamsCode, "invalid transfer value")
+	}
 	if verifySig {
+		if txmsg.From == nil {
+			return nil, newResponse(InvalidParamsCode, "no from address")
+		}
 		address, err := common.AddressFromPubSlice(tx.Pub)
 		if err != nil {
-			return nil, nil, newResponse(InvalidPublicKey, err.Error())
+			return nil, newResponse(InvalidPublicKey, err.Error())
 		}
-		if !bytes.Equal(tx.From.Address[:], address.Bytes()) {
-			return nil, nil, newResponse(InvalidPublicKey)
+		if !bytes.Equal(txmsg.From.Slice(), address[:]) {
+			return nil, newResponse(InvalidPublicKey, "signature not match with from address")
 		}
-
-		hoe, err = common.HashObject(tx)
+		hoe, err := common.HashObject(txmsg)
 		if err != nil {
-			return nil, nil, newResponse(HashObjectErrCode, err.Error())
+			return nil, newResponse(HashObjectErrCode, err.Error())
 		}
-
 		if v := common.VerifyHash(hoe, tx.Pub, tx.Sig); !v {
-			return nil, nil, newResponse(InvalidSignatureCode)
+			return nil, newResponse(InvalidSignatureCode)
+		}
+		// verify multi signaturesa
+		if len(txmsg.MultiSigs) > 0 {
+			for i, pas := range txmsg.MultiSigs {
+				if pas == nil {
+					return nil, newResponse(InvalidMultiSigsCode, fmt.Sprintf("nil pas found at index %d", i))
+				}
+				if !common.VerifyHash(hoe, pas.PublicKey, pas.Signature) {
+					return nil, newResponse(InvalidMultiSigsCode, fmt.Sprintf("signature verify failed at index %d", i))
+				}
+			}
 		}
 	}
+	return txmsg, nil
 
-	from := common.Address{}
-	copy(from[:], tx.From.Address)
-	if from.IsReserved() {
-		return nil, nil, newResponse(ReservedFromAddrErrCode)
-	}
-	var pto *common.Address = nil
-	if tx.To != nil && len(tx.To.Address) > 0 {
-		to := common.Address{}
-		copy(to[:], tx.To.Address)
-		pto = &to
-	}
-
-	val, ok := math.ParseBig256(tx.Val)
-	if !ok || (len(tx.Input) == 0 && val.Sign() == 0) {
-		return nil, nil, newResponse(InvalidParamsCode, "invalid value")
-	}
-
-	var msigs models.PubAndSigs
-	if len(tx.Multisigs) > 0 {
-		msigs = make(models.PubAndSigs, len(tx.Multisigs))
-		for i := 0; i < len(tx.Multisigs); i++ {
-			if len(tx.Multisigs[i]) == 0 || len(tx.Multipubs[i]) == 0 {
-				return nil, nil, newResponse(InvalidMultiSigsCode)
-			}
-			if !common.VerifyHash(hoe, tx.Multipubs[i], tx.Multisigs[i]) {
-				return nil, nil, newResponse(InvalidMultiSigsCode)
-			}
-			msigs[i] = &models.PubAndSig{PublicKey: tx.Multipubs[i], Signature: tx.Multisigs[i]}
-		}
-	}
-
-	txmsg = &models.Transaction{
-		ChainID:   common.ChainID(tx.Chainid),
-		From:      &from,
-		To:        pto,
-		Nonce:     tx.Nonce,
-		Val:       val,
-		Input:     tx.Input,
-		UseLocal:  tx.Uselocal,
-		Extra:     tx.Extra,
-		MultiSigs: msigs,
-		Version:   models.TxVersion,
-	}
-
-	return hoe, txmsg, nil
+	// if tx == nil {
+	// 	return nil, nil, newResponse(InvalidParamsCode, "nil tx")
+	// }
+	// if tx.From == nil || len(tx.From.Address) != common.AddressLength {
+	// 	return nil, nil, newResponse(InvalidParamsCode, "illegal from address")
+	// }
+	// if len(tx.Multipubs) != len(tx.Multisigs) {
+	// 	return nil, nil, newResponse(InvalidParamsCode, "multipubs and multisigs not match")
+	// }
+	//
+	// if tx.Chainid == uint32(common.MainChainID) {
+	// 	// Only system contracts can be called on the main chain
+	// 	if tx.To == nil || len(tx.To.Address) == 0 || !common.BytesToAddress(tx.To.Address).IsSystemContract() {
+	// 		return nil, nil, newResponse(InvalidBCCode)
+	// 	}
+	// }
+	//
+	// from := common.Address{}
+	// copy(from[:], tx.From.Address)
+	// if from.IsReserved() {
+	// 	return nil, nil, newResponse(ReservedFromAddrErrCode)
+	// }
+	// var pto *common.Address = nil
+	// if tx.To != nil && len(tx.To.Address) > 0 {
+	// 	to := common.Address{}
+	// 	copy(to[:], tx.To.Address)
+	// 	pto = &to
+	// }
+	//
+	// val, ok := math.ParseBig256(tx.Val)
+	// if !ok || (len(tx.Input) == 0 && val.Sign() == 0) {
+	// 	return nil, nil, newResponse(InvalidParamsCode, "invalid value")
+	// }
+	//
+	// var msigs models.PubAndSigs
+	// if len(tx.Multisigs) > 0 {
+	// 	msigs = make(models.PubAndSigs, len(tx.Multisigs))
+	// 	for i := 0; i < len(tx.Multisigs); i++ {
+	// 		if len(tx.Multisigs[i]) == 0 || len(tx.Multipubs[i]) == 0 {
+	// 			return nil, nil, newResponse(InvalidMultiSigsCode)
+	// 		}
+	// 		if !common.VerifyHash(hoe, tx.Multipubs[i], tx.Multisigs[i]) {
+	// 			return nil, nil, newResponse(InvalidMultiSigsCode)
+	// 		}
+	// 		msigs[i] = &models.PubAndSig{PublicKey: tx.Multipubs[i], Signature: tx.Multisigs[i]}
+	// 	}
+	// }
+	//
+	// txmsg = &models.Transaction{
+	// 	ChainID:  common.ChainID(tx.Chainid),
+	// 	From:     &from,
+	// 	To:       pto,
+	// 	Nonce:    tx.Nonce,
+	// 	Val:      val,
+	// 	Input:    tx.Input,
+	// 	UseLocal: tx.Uselocal,
+	// 	// Extra:     tx.Extra,
+	// 	MultiSigs: msigs,
+	// 	Version:   models.TxVersion,
+	// }
+	//
+	// {
+	// 	// generate tx.extra
+	// 	if len(tx.Sig) == 65 || len(tx.Extra) > 0 {
+	// 		extras := &models.Extra{Type: models.LegacyTxType}
+	// 		if len(tx.Sig) == 65 {
+	// 			r, s, v := models.DecodeSignature(tx.Sig)
+	// 			extras.R = r
+	// 			extras.S = s
+	// 			extras.V = v
+	// 		}
+	// 		if err := txmsg.SetExtraKeys(extras); err != nil {
+	// 			return nil, nil, newResponse(InvalidParamsCode, err.Error())
+	// 		}
+	// 		if len(tx.Extra) > 0 {
+	// 			if err := txmsg.SetTkmExtra(tx.Extra); err != nil {
+	// 				return nil, nil, newResponse(InvalidParamsCode, err.Error())
+	// 			}
+	// 		}
+	// 	}
+	// }
+	// if len(tx.Sig) == 65 {
+	// 	r, s, v := models.DecodeSignature(tx.Sig)
+	// 	extra := &models.Extra{
+	// 		Type: 0,
+	// 		V:    v,
+	// 		R:    r,
+	// 		S:    s,
+	// 	}
+	// 	var txextramap1 map[string]interface{}
+	// 	if tx.Extra == nil {
+	// 		tx.Extra, _ = json.Marshal(extra)
+	// 	} else {
+	// 		if err := json.Unmarshal(tx.Extra, &txextramap1); err != nil {
+	// 			return nil, nil, newResponse(InvalidParamsCode, "invalid value")
+	// 		}
+	// 		if gas, ok := txextramap1["gas"]; ok {
+	// 			extra.Gas = uint64(gas.(float64))
+	// 		}
+	// 		extra.TkmExtra = txextramap1
+	// 		extrab, err := json.Marshal(extra)
+	// 		if err != nil {
+	// 			return nil, nil, newResponse(InvalidParamsCode, "invalid value")
+	// 		}
+	// 		tx.Extra = extrab
+	// 	}
+	// }
+	//
+	// if verifySig {
+	// 	address, err := common.AddressFromPubSlice(tx.Pub)
+	// 	if err != nil {
+	// 		return nil, nil, newResponse(InvalidPublicKey, err.Error())
+	// 	}
+	// 	if !bytes.Equal(tx.From.Address[:], address.Bytes()) {
+	// 		return nil, nil, newResponse(InvalidPublicKey)
+	// 	}
+	// 	hoe, err = common.HashObject(txmsg)
+	// 	if err != nil {
+	// 		return nil, nil, newResponse(HashObjectErrCode, err.Error())
+	// 	}
+	//
+	// 	if v := common.VerifyHash(hoe, tx.Pub, tx.Sig); !v {
+	// 		return nil, nil, newResponse(InvalidSignatureCode)
+	// 	}
+	// }
+	// return hoe, txmsg, nil
 }
 
 // CallTransaction return resp.data as TransactionReceipt in JSON format
@@ -350,7 +445,7 @@ func (s *RPCServer) CallTransaction(ctx context.Context, tx *RpcTx) (*RpcRespons
 	if err != nil {
 		return newResponse(GetChainDataErrCode, err.Error()), nil
 	}
-	_, txmsg, resp := checkRpcTx(tx, false)
+	txmsg, resp := checkRpcTx(tx, false)
 	if resp != nil {
 		return resp, nil
 	}
@@ -521,7 +616,7 @@ func (s *RPCServer) GetTransactions(ctx context.Context, txs *RpcTxList) (*RpcRe
 // SendTx return resp.data as returned information
 func (s *RPCServer) SendTx(ctx context.Context, tx *RpcTx) (*RpcResponse, error) {
 
-	hashOfEvent, txmsg, resp := checkRpcTx(tx, true)
+	txmsg, resp := checkRpcTx(tx, true)
 	if resp != nil {
 		return resp, nil
 	}
@@ -543,7 +638,7 @@ func (s *RPCServer) SendTx(ctx context.Context, tx *RpcTx) (*RpcResponse, error)
 	if acc == nil {
 		acc = models.NewAccount(*txmsg.From, nil)
 	}
-	if acc.Nonce > tx.Nonce {
+	if acc.Nonce > txmsg.Nonce {
 		return newResponse(InvalidParamsCode, "invalid nonce"), nil
 	}
 
@@ -574,7 +669,8 @@ func (s *RPCServer) SendTx(ctx context.Context, tx *RpcTx) (*RpcResponse, error)
 		// }
 		// s.eventer.Post(relay)
 	}
-	hs := common.BytesToHash(hashOfEvent)
+	// hs := common.BytesToHash(hashOfEvent)
+	hs := txmsg.Hash()
 	return &RpcResponse{Code: SuccessCode, Data: hs.Hex()}, nil
 }
 
@@ -696,7 +792,7 @@ func (s *RPCServer) GetBlockHeaders(ctx context.Context, req *RpcBlockHeight) (*
 	}
 	block, err := cdata.GetBlock(common.Height(req.Height))
 	if err != nil {
-		s.logger.Errorf("[RPCServer] GetBlock %d Error:", common.Height(req.Height), err.Error())
+		s.logger.Errorf("[RPCServer] GetBlock(ChainID:%d, Height:%d) Error: %v", req.Chainid, req.Height, err)
 		return newResponse(NilBlockCode, err.Error()), nil
 	}
 	if block == nil || block.BlockBody == nil {
@@ -778,7 +874,7 @@ func (s *RPCServer) GetBlockTxs(ctx context.Context, req *RpcBlockTxsReq) (*RpcR
 	}
 }
 
-// Returns the chain information of the specified chain ID, which can be multiple. Return all
+// GetChainInfo Returns the chain information of the specified chain ID, which can be multiple. Return all
 // when not specified
 func (s *RPCServer) GetChainInfo(ctx context.Context, req *RpcChainInfoReq) (*RpcResponse, error) {
 	if req == nil {
@@ -867,7 +963,7 @@ func (s *RPCServer) GetChainInfo(ctx context.Context, req *RpcChainInfoReq) (*Rp
 	}
 }
 
-// Get the information needed for cashing the check, serialized (not JSON)
+// MakeVccProof Get the information needed for cashing the check, serialized (not JSON)
 func (s *RPCServer) MakeVccProof(ctx context.Context, req *RpcCashCheck) (*RpcResponse, error) {
 	if req == nil {
 		return newResponse(InvalidParamsCode, "nil request"), nil
@@ -939,7 +1035,7 @@ func (s *RPCServer) MakeVccProof(ctx context.Context, req *RpcCashCheck) (*RpcRe
 	}
 }
 
-// Get the nodeid list of consensus committee members of the specified epoch of the specified chain
+// GetCommittee Get the nodeid list of consensus committee members of the specified epoch of the specified chain
 func (s *RPCServer) GetCommittee(ctx context.Context, req *RpcChainEpoch) (*RpcResponse, error) {
 	if req == nil {
 		return newResponse(InvalidParamsCode, "nil request"), nil
@@ -962,7 +1058,7 @@ func (s *RPCServer) GetCommittee(ctx context.Context, req *RpcChainEpoch) (*RpcR
 	}
 }
 
-// Generate the proof of non-payment to be used for revoking the check
+// MakeCCCExistenceProof Generate the proof of non-payment to be used for revoking the check
 func (s *RPCServer) MakeCCCExistenceProof(ctx context.Context, req *RpcCashCheck) (*RpcResponse, error) {
 	if req == nil {
 		return newResponse(InvalidParamsCode, "nil request"), nil
@@ -1035,7 +1131,7 @@ func (s *RPCServer) MakeCCCExistenceProof(ctx context.Context, req *RpcCashCheck
 	}
 }
 
-// Get the hash of the transaction of the check cashed
+// GetCCCRelativeTx Get the hash of the transaction of the check cashed
 func (s *RPCServer) GetCCCRelativeTx(ctx context.Context, req *RpcCashCheck) (*RpcResponse, error) {
 	if req == nil {
 		return newResponse(InvalidParamsCode, "nil request"), nil
@@ -1063,7 +1159,7 @@ func (s *RPCServer) GetCCCRelativeTx(ctx context.Context, req *RpcCashCheck) (*R
 	return &RpcResponse{Code: SuccessCode, Data: h.Hex()}, nil
 }
 
-// Get the proof of node pledge at the specified era (a specified root of required reserver tree)
+// GetRRProofs Get the proof of node pledge at the specified era (a specified root of required reserver tree)
 func (s *RPCServer) GetRRProofs(ctx context.Context, req *RpcRRProofReq) (*RpcResponse, error) {
 	return newResponse(OperationFailedCode), errors.New("unsupport operation")
 }
@@ -1094,7 +1190,7 @@ const (
 	TCVerify      uint32 = 0x10
 )
 
-// req.Type Bitwise operation:
+// TryCrypto req.Type Bitwise operation:
 //
 // If TCVerify exists, the input Msg must be: Signature+Hash+PublicKey, if the verification is
 // successful, return success, otherwise the verification fails

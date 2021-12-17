@@ -22,6 +22,7 @@ func (l Log) MarshalJSON() ([]byte, error) {
 		TxHash      common.Hash    `json:"transactionHash" gencodec:"required"`
 		TxIndex     hexutil.Uint   `json:"transactionIndex" gencodec:"required"`
 		Index       hexutil.Uint   `json:"logIndex" gencodec:"required"`
+		BlockHash   *common.Hash   `json:"blockHash"`
 	}
 	var enc Log
 	enc.Address = l.Address
@@ -31,6 +32,7 @@ func (l Log) MarshalJSON() ([]byte, error) {
 	enc.TxHash = l.TxHash
 	enc.TxIndex = hexutil.Uint(l.TxIndex)
 	enc.Index = hexutil.Uint(l.Index)
+	enc.BlockHash = l.BlockHash
 	return json.Marshal(&enc)
 }
 
@@ -44,6 +46,7 @@ func (l *Log) UnmarshalJSON(input []byte) error {
 		TxHash      *common.Hash    `json:"transactionHash" gencodec:"required"`
 		TxIndex     *hexutil.Uint   `json:"transactionIndex" gencodec:"required"`
 		Index       *hexutil.Uint   `json:"logIndex" gencodec:"required"`
+		BlockHash   *common.Hash    `json:"blockHash"`
 	}
 	var dec Log
 	if err := json.Unmarshal(input, &dec); err != nil {
@@ -77,5 +80,8 @@ func (l *Log) UnmarshalJSON(input []byte) error {
 		return errors.New("missing required field 'logIndex' for Log")
 	}
 	l.Index = uint(*dec.Index)
+	if dec.BlockHash != nil {
+		l.BlockHash = dec.BlockHash
+	}
 	return nil
 }

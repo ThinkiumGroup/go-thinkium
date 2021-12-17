@@ -114,7 +114,7 @@ func (a *Account) HashValue() ([]byte, error) {
 
 func (a *Account) Clone() *Account {
 	ret := &Account{
-		Addr:            a.Addr.Clone(),
+		Addr:            a.Addr,
 		Nonce:           a.Nonce,
 		Balance:         new(big.Int).Set(a.Balance),
 		StorageRoot:     common.CloneByteSlice(a.StorageRoot),

@@ -24,6 +24,9 @@ type Starter struct {
 const defaultStarterPK = "04e60f922c3d65366fd7539ba5ca4bcd23d8cc0bc9f247495a77a85a64c59ab8a5a8f1c2f2a114df04aedc2b81a3b1310ae9426f44348757c4c0e8d5f1918030df"
 
 func (s *Starter) Validate() error {
+	if s == nil {
+		return nil
+	}
 	SystemStarterPrivate = nil
 	SystemStarterPublic = nil
 

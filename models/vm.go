@@ -42,6 +42,7 @@ const (
 	PosDataNodeRewardName = "posdatanodereward5w.202012"
 	GasLimitName          = "gaslimit"
 	GasPriceName          = "gasprice"
+	RRStatusAuth          = "rrstatusauth"
 
 	ManagedCommNodeIdsName = "managedcommnodeids"
 )

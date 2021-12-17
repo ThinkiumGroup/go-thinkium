@@ -17,9 +17,11 @@ package models
 import (
 	"bytes"
 	"encoding/hex"
+	"math/big"
 	"testing"
 
 	"github.com/ThinkiumGroup/go-common"
+	"github.com/ThinkiumGroup/go-common/math"
 	"github.com/stephenfire/go-rtl"
 )
 
@@ -79,5 +81,89 @@ func TestRRProofs(t *testing.T) {
 		t.Errorf("hash not match")
 	} else {
 		t.Logf("hash match")
+	}
+}
+
+func TestRRStatusAct(t *testing.T) {
+	type test struct {
+		a, b int64
+		n    int64
+		err  bool
+	}
+
+	vs := []test{
+		{0, 1, 0, true},
+		{1, 0, 0, true},
+		{-1, 1, 0, true},
+		{-(math.MaxUint16 + 1), -1, 0, true},
+		{1, math.MaxUint16 + 1, 0, true},
+		{1, 1, 1, false},
+		{-1, -1, -1, false},
+		{256, 1, 257, false},
+		{255, 1, 255, false},
+		{-256, -1, -257, false},
+		{-255, -9, -255, false},
+	}
+
+	for _, v := range vs {
+		a := (*RRStatusAct)(big.NewInt(v.a))
+		b := (*RRStatusAct)(big.NewInt(v.b))
+		err := a.Merge(b)
+		witherr := err != nil
+		if (witherr && !v.err) || (witherr == false && (*big.Int)(a).Int64() != v.n) {
+			t.Fatalf("%d merge %d expecting %d with(%t) error, but: %d with(%t) error:%v", v.a, v.b, v.n, v.err, (*big.Int)(a).Int64(), err != nil, err)
+		}
+	}
+	t.Logf("RRStatusAct.Merge check")
+}
+
+func TestRRStatus(t *testing.T) {
+	type test struct {
+		changing int64
+		nvalue   RRStatus
+		msg      string
+		changed  bool
+	}
+	vs := []test{
+		{0, 0, "", false},
+		{1, 1, "SET", true},
+		{2, 3, "SET", true},
+		{math.MaxUint16, math.MaxUint16, "SET", true},
+		{math.MaxUint16 + 1, math.MaxUint16, "", false},
+		{-1, math.MaxUint16 - 1, "CLR", true},
+		{7, math.MaxUint16, "SET", true},
+		{7, math.MaxUint16, "SET", false},
+		{-(math.MaxUint16 + 1), math.MaxUint16, "", false},
+		{-15, math.MaxUint16 - 15, "CLR", true},
+		{-8, math.MaxUint16 - 15, "CLR", false},
+		{-math.MaxUint16, 0, "CLR", true},
+		{-255, 0, "CLR", false},
+	}
+
+	status := RRStatus(0)
+	var nvalue RRStatus
+	var msg string
+	var changed bool
+	for _, v := range vs {
+		act := big.NewInt(v.changing)
+		nvalue, msg, changed = status.Change(act)
+		if nvalue != v.nvalue || msg != v.msg || changed != v.changed {
+			t.Fatalf("%d(%s)->(%d,%s,%t) but expecting:(%d,%s,%t)", status, act, v.nvalue, v.msg, v.changed, nvalue, msg, changed)
+		}
+		status = nvalue
+	}
+
+	t.Logf("RRStatus.Change checked")
+
+	status = 0x8083
+	if status.Match(0x1) {
+		t.Logf("%x matchs 0x1 check", status)
+	} else {
+		t.Fatalf("%x matchs 0x1 failed", status)
+	}
+	if status.Match(0x0f80) == false {
+		t.Logf("%x not match 0x0f80 check", status)
+	} else {
+		t.Fatalf("%x not match 0x0f80 failed", status)
 	}
 }

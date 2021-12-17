@@ -113,7 +113,7 @@ func (h *LastHeightMessage) String() string {
 	if h == nil {
 		return "LastHeight<nil>"
 	}
-	return fmt.Sprintf("LastHeigth{ChainID:%d Height:%s BlockHash:%x}", h.ChainID, h.Height, h.BlockHash[:5])
+	return fmt.Sprintf("LastHeigth{ChainID:%d Height:%s BlockHash:%x}", h.ChainID, &(h.Height), h.BlockHash[:5])
 }
 
 type SyncRequest struct {

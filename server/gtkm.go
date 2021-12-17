@@ -31,10 +31,12 @@ import (
 	"github.com/ThinkiumGroup/go-common"
 	"github.com/ThinkiumGroup/go-common/db"
 	"github.com/ThinkiumGroup/go-common/log"
+	"github.com/ThinkiumGroup/go-thinkium/api"
 	cmd2 "github.com/ThinkiumGroup/go-thinkium/cmd"
 	"github.com/ThinkiumGroup/go-thinkium/config"
 	"github.com/ThinkiumGroup/go-thinkium/consts"
 	"github.com/ThinkiumGroup/go-thinkium/dao"
+	"github.com/ThinkiumGroup/go-thinkium/ethrpc"
 	"github.com/ThinkiumGroup/go-thinkium/models"
 	"github.com/ThinkiumGroup/go-thinkium/network"
 	"github.com/ThinkiumGroup/go-thinkium/rpcserver"
@@ -46,6 +48,7 @@ type thinkium struct {
 	Cmanager     models.Engine
 	Controller   models.Eventer
 	RpcServer    *rpcserver.RPCServer
+	EthRpcServer *ethrpc.Server
 	BlockNoticer models.Noticer
 
 	services []common.Service
@@ -190,6 +193,7 @@ func main() {
 		log.Error("thinkium start error: ", err)
 		os.Exit(5)
 	}
+
 	defer tkm.Close()
 
 	runCtx := &runContext{d: tkm, c: conf}
@@ -248,37 +252,65 @@ func NewTkm(conf *config.Config) (*thinkium, error) {
 	models.VMPlugin = common.InitShareObject("./vm.so")
 	dataPlug := common.InitShareObject("./data.so")
 	eventerPlug := common.InitShareObject("./sysq.so")
-	controllerPlug := common.InitShareObject("./consensus.so")
+	enginePlug := common.InitShareObject("./consensus.so")
 
 	// Bucket size = number of chains that can participate in consensus * 2 (assuming there are parent chains) + 1 (main chain)
 	barrelSize := len(conf.Chains)*2 + 1
-	control := models.NewEventer(eventerPlug, 100000, barrelSize, 10, func() {
+	eventer := models.NewEventer(eventerPlug, 100000, barrelSize, 10, func() {
 		log.Warn("****************stopping system****************")
 		tkm.Shutdown <- 1
-	})
-	dmanager, err := models.NewDManager(dataPlug, conf.DataConf.Path, control)
+	}, models.LocateIsInCommittee(enginePlug))
+	dmanager, err := models.NewDManager(dataPlug, conf.DataConf.Path, eventer)
 	if err != nil {
 		log.Error("create data manager error:", err)
 		return nil, err
 	}
 	dmanager.SetChainStructs(conf)
 
-	nmanager, err := network.NewManager(conf.NetworkConf.P2Ps.GetPortRange(), control)
+	nmanager, err := network.NewManager(conf.NetworkConf.P2Ps.GetPortRange(), eventer)
 	if err != nil {
 		log.Error("create network manager error:", err)
 		return nil, err
 	}
 	nmanager.SetDataManager(dmanager)
 
-	engine := models.NewConsensusEngine(controllerPlug, control, nmanager, dmanager, conf)
+	engine := models.NewConsensusEngine(enginePlug, eventer, nmanager, dmanager, conf)
 
-	control.SetEngine(engine)
-	control.SetDataManager(dmanager)
-	control.SetNetworkManager(nmanager)
+	eventer.SetEngine(engine)
+	eventer.SetDataManager(dmanager)
+	eventer.SetNetworkManager(nmanager)
 
 	var rpcsrv *rpcserver.RPCServer
-	// if conf.NetworkConf.RPCs != nil && conf.NetworkConf.RPCs.RPCServerAddr != nil {
-	rpcsrv, err = rpcserver.NewRPCServer(conf.NetworkConf.RPCs.GetRpcEndpoint(), nmanager, dmanager, engine, control)
+	// if conf.NetworkConf.RPCs != nil && conf.NetworkConf.RPCs.EthRPCServerAddr != nil {
+	rpcsrv, err = rpcserver.NewRPCServer(conf.NetworkConf.RPCs.GetRpcEndpoint(), nmanager, dmanager, engine, eventer)
+	ethrpcsrv, errethrpc := ethrpc.NewServer(conf.NetworkConf.ETHRPC.GetRpcEndpoint())
+	if errethrpc != nil {
+		panic(err)
+	}
+	rpcAPI := []ethrpc.API{
+		{
+			Namespace: "eth",
+			Public:    true,
+			Service:   api.NewPublicBlockChainAPI(nmanager, dmanager, engine, eventer),
+			Version:   "1.0",
+		},
+		{
+			Namespace: "web3",
+			Public:    true,
+			Service:   &api.PublicWeb3API{},
+			Version:   "1.0",
+		},
+		{
+			Namespace: "net",
+			Public:    true,
+			Service:   api.NewPublicNetAPI(dmanager),
+			Version:   "1.0",
+		},
+	}
+	if err = ethrpc.RegisterApis(rpcAPI, []string{"eth", "web3", "net"}, ethrpcsrv, false); err != nil {
+		panic(err)
+	}
+
 	// }
 
 	if conf.NetworkConf.Pprof != nil && len(*conf.NetworkConf.Pprof) > 0 {
@@ -291,9 +323,12 @@ func NewTkm(conf *config.Config) (*thinkium, error) {
 	tkm.Nmanager = nmanager
 	tkm.Dmanager = dmanager
 	tkm.Cmanager = engine
-	tkm.Controller = control
+	tkm.Controller = eventer
 	tkm.RpcServer = rpcsrv
-
+	tkm.EthRpcServer = ethrpcsrv
+	// if tkm.Dmanager.IsDataNode() || tkm.Dmanager.IsMemoNode() {
+	// 	models.ETHSigner = models.NewLondonSigner(new(big.Int).SetUint64(uint64(tkm.Dmanager.DataNodeOf() + common.BigChainIDBase)))
+	// }
 	var noticer models.Noticer
 	if conf.Noticer != nil {
 		log.Debugf("load NOTICE with config: %v", conf.Noticer)

@@ -44,12 +44,18 @@ const (
 	MaxPopOfOneShardDelta = 10 // Delta number threshold per chain
 
 	MaxTxCountPerBlock = 2000 // The maximum number of transactions packed in a block
+	// The maximum number of deltas that can be merged in each block is twice the maximum number of TX
+	MaxDeltasPerBlock = int(MaxTxCountPerBlock) << 1
 
 	// When the transaction execution is incompatible, the version number can be used to distinguish
 
+	// compatible with Ethereum's transaction hash, pay attention to the tx.Hash() and tx.HashValue()
+	// methods when upgrading the version
+	ETHHashTxVersion      = 2
+	NewBaseChainTxVersion = 3
 	// There is a bug in V0, which leads to insufficient amount when creating or invoking the
 	// contract, and the transaction will be packaged, but the nonce value does not increase
-	TxVersion = 1
+	TxVersion = NewBaseChainTxVersion
 	// V0's BlockSummary.Hash Only a through transmission of BlockHash, can't reflect the location
 	// information of the block, and can't complete the proof of cross chain. V1 adds chainid and
 	// height to hash
@@ -66,9 +72,6 @@ var (
 	BigShannon = big.NewInt(1000000000)
 	BigTKM     = big.NewInt(0).Mul(BigShannon, BigShannon)
 	BigBillion = big.NewInt(0).Mul(BigShannon, BigTKM)
-
-	// The maximum number of deltas that can be merged in each block is twice the maximum number of TX
-	MaxDeltasPerBlock = int(MaxTxCountPerBlock) << 1
 
 	SystemNoticer Noticer
 )

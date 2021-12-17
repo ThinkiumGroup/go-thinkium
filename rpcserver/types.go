@@ -26,7 +26,6 @@ import (
 
 	"github.com/ThinkiumGroup/go-common"
 	"github.com/ThinkiumGroup/go-common/hexutil"
-	"github.com/ThinkiumGroup/go-common/log"
 	"github.com/ThinkiumGroup/go-common/math"
 	"github.com/ThinkiumGroup/go-thinkium/models"
 )
@@ -42,6 +41,7 @@ type (
 		Input     hexutil.Bytes   `json:"input"`     // Transaction input information
 		UseLocal  bool            `json:"uselocal"`  // Is it a second currency transaction? False: base currency, true: second currency
 		Extra     hexutil.Bytes   `json:"extra"`     // It is currently used to save transaction types. If it does not exist, it is a normal transaction. Otherwise, it will correspond to special operations
+		Version   uint16          `json:"version"`   // Version number used to distinguish different execution methods when the transaction execution is incompatible due to upgrade
 		TimeStamp uint64          `json:"timestamp"` // The timestamp of the block in which it is located
 	}
 
@@ -207,6 +207,50 @@ func (r *TransactionReceipt) FullReceipt(tx *models.Transaction, blockHeight com
 	return tr
 }
 
+func (c *AccountChange) String() string {
+	if c == nil {
+		return "Tx<nil>"
+	}
+	tx := &models.Transaction{
+		ChainID:   c.ChainID,
+		From:      c.From,
+		To:        c.To,
+		Nonce:     c.Nonce,
+		UseLocal:  c.UseLocal,
+		Val:       c.Val,
+		Input:     []byte(c.Input),
+		Extra:     []byte(c.Extra),
+		Version:   models.TxVersion,
+		MultiSigs: nil,
+	}
+	var extraKeys *models.Extra
+	if len(tx.Extra) > 0 {
+		extraKeys = tx.ExtraKeys()
+	}
+	txHash := tx.Hash()
+	return fmt.Sprintf("Tx{"+
+		"\n\tChainID:%d"+
+		"\n\tHeight:%d"+
+		"\n\tTxHash:%x"+
+		"\n\tFrom:%x"+
+		"\n\tTo:%x"+
+		"\n\tNonce:%d"+
+		"\n\tVal:%s"+
+		"\n\tInput:%x"+
+		"\n\tUselocal:%t"+
+		"\n\tExtra:(%d) %s"+
+		"\n\tTimestamp:%d"+
+		"\n}", c.ChainID, c.Height, txHash[:], c.From.Slice(), common.ForPrint(c.To, 0, -1), c.Nonce,
+		math.BigIntForPrint(c.Val), common.ForPrint(c.Input, 0, -1), c.UseLocal, len(c.Extra), extraKeys, c.TimeStamp)
+}
+
+func (m *BlockMessage) String() string {
+	if m == nil {
+		return "Msg<nil>"
+	}
+	return fmt.Sprintf("Msg{Elections:%v Txs:\n%s}", m.Elections, m.AccountChanges)
+}
+
 func (r *TransactionReceipt) Successed() bool {
 	return r.Status == models.ReceiptStatusSuccessful
 }
@@ -227,7 +271,7 @@ func (r *TransactionReceipt) String() string {
 		"\n\tGasFee:%s"+
 		"\n\tError:%s"+
 		"\n}", r.Transaction.FullString(), string(r.PostState), r.Status, r.Logs, r.TxHash[:], r.ContractAddress[:],
-		[]byte(r.Out), r.Height, r.GasUsed, r.GasFee, r.Error)
+		[]byte(r.Out), &(r.Height), r.GasUsed, r.GasFee, r.Error)
 }
 
 func (m *RpcAddress) PrintString() string {
@@ -255,34 +299,114 @@ func (m *RpcTx) PrintString() string {
 }
 
 func (m *RpcTx) HashValue() ([]byte, error) {
-	hasher := common.RealCipher.Hasher()
-	if _, err := m.HashSerialize(hasher); err != nil {
+	// hasher := common.RealCipher.Hasher()
+	// if _, err := m.HashSerialize(hasher); err != nil {
+	// 	return nil, err
+	// }
+	// return hasher.Sum(nil), nil
+	if tx, err := m.ToTx(); err != nil {
 		return nil, err
+	} else {
+		return tx.HashValue()
 	}
-	return hasher.Sum(nil), nil
 }
 
-// see models.Transaction.HashSerialize
-func (m *RpcTx) HashSerialize(w io.Writer) (int, error) {
-	if len(m.From.Address) != 20 {
-		return 0, errors.New("from address length must be 20")
+func (m *RpcTx) ToTx() (*models.Transaction, error) {
+	if m == nil {
+		return nil, common.ErrNil
 	}
-	from := common.BytesToAddressP(m.From.Address)
-	var to *common.Address
+	var from, to *common.Address
+	if m.From != nil && len(m.From.Address) > 0 {
+		if len(m.From.Address) != common.AddressLength {
+			return nil, errors.New("illegal from address")
+		}
+		from = common.BytesToAddressP(m.From.Address)
+	} else {
+		from = new(common.Address)
+	}
 	if m.To != nil && len(m.To.Address) > 0 {
-		if len(m.To.Address) != 20 {
-			return 0, errors.New("to address length must be 20")
+		if len(m.To.Address) != common.AddressLength {
+			return nil, errors.New("illegal to address")
 		}
 		to = common.BytesToAddressP(m.To.Address)
 	}
-	val, _ := math.ParseBig256(m.Val)
-
-	p := models.TransactionStringForHash(common.ChainID(m.Chainid), from, to, m.Nonce,
-		m.Uselocal, val, m.Input, m.Extra)
-
-	log.Infof("%s -> %s", m.PrintString(), p)
-	return w.Write([]byte(p))
+	var val *big.Int
+	if len(m.Val) > 0 {
+		var ok bool
+		if val, ok = math.ParseBig256(m.Val); !ok {
+			return nil, errors.New("invalid value")
+		}
+	}
+	var msigs models.PubAndSigs
+	if len(m.Multisigs) > 0 || len(m.Multipubs) > 0 {
+		if len(m.Multisigs) != len(m.Multipubs) {
+			return nil, errors.New("lengths of multi public keys and signatures not equal")
+		}
+		for i := 0; i < len(m.Multisigs); i++ {
+			if len(m.Multisigs[i]) == 0 || len(m.Multipubs[i]) == 0 {
+				return nil, fmt.Errorf("invalid signature or public key at index %d", i)
+			}
+			msigs = append(msigs, &models.PubAndSig{
+				PublicKey: common.CopyBytes(m.Multipubs[i]),
+				Signature: common.CopyBytes(m.Multisigs[i]),
+			})
+		}
+	}
+	tx := &models.Transaction{
+		ChainID:   common.ChainID(m.Chainid),
+		From:      from,
+		To:        to,
+		Nonce:     m.Nonce,
+		UseLocal:  m.Uselocal,
+		Val:       val,
+		Input:     common.CopyBytes(m.Input),
+		Extra:     nil,
+		Version:   models.TxVersion,
+		MultiSigs: msigs,
+	}
+	// generate tx.extra
+	if len(m.Sig) == 65 || len(m.Extra) > 0 {
+		extras := &models.Extra{Type: models.LegacyTxType}
+		if len(m.Sig) == 65 {
+			r, s, v := models.DecodeSignature(m.Sig)
+			extras.R = r
+			extras.S = s
+			extras.V = v
+		}
+		if err := tx.SetExtraKeys(extras); err != nil {
+			return nil, err
+		}
+		if len(m.Extra) > 0 {
+			if err := tx.SetTkmExtra(m.Extra); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return tx, nil
 }
+
+//
+// // see models.Transaction.HashSerialize
+// func (m *RpcTx) HashSerialize(w io.Writer) (int, error) {
+// 	if len(m.From.Address) != 20 {
+// 		return 0, errors.New("from address length must be 20")
+// 	}
+// 	from := common.BytesToAddressP(m.From.Address)
+// 	var to *common.Address
+// 	if m.To != nil && len(m.To.Address) > 0 {
+// 		if len(m.To.Address) != 20 {
+// 			return 0, errors.New("to address length must be 20")
+// 		}
+// 		to = common.BytesToAddressP(m.To.Address)
+// 	}
+// 	val, _ := math.ParseBig256(m.Val)
+//
+// 	p := models.TransactionStringForHash(common.ChainID(m.Chainid), from, to, m.Nonce,
+// 		m.Uselocal, val, m.Input, m.Extra)
+//
+// 	log.Infof("%s -> %s", m.PrintString(), p)
+// 	return w.Write([]byte(p))
+// }
 
 func (m *RpcCashCheck) ToCashCheck() (*models.CashCheck, error) {
 	if m == nil {

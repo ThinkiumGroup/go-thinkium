@@ -1,0 +1,17 @@
+.idea/
+.DS_Store
+**/.DS_Store
+config/*.yaml
+server/dvpp
+go-plugins
+.gitmodules
+scripts/
+glide.*
+core/
+/config/*/
+/venv
+/.python-version
+go.sum
+/tests/cli
+/tests/cli.conf
+/start/gtkm

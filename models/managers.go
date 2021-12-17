@@ -52,6 +52,7 @@ type (
 		Height     common.Height    // current height
 		Block      *BlockEMessage   // block of current height
 		Waterlines []ShardWaterline // waterlines of shards at current height
+		CheckEpoch bool             // whether to check epoch matchness
 	}
 
 	ProposeResult struct {
@@ -102,6 +103,7 @@ type (
 		// GetBlockChain get BlockChain of current Chain
 		GetBlockChain() BlockChain
 		GetBlock(height common.Height) (*BlockEMessage, error)
+		GetBlockByHash(hashOfHeader []byte) (*BlockEMessage, error)
 		GetBlockWithUnverified(height common.Height) (*BlockEMessage, error)
 		SaveUnverifiedBlock(block *BlockEMessage) error
 		GetBlockHash(height common.Height) (*common.Hash, bool)
@@ -127,14 +129,13 @@ type (
 		IsFull() bool
 		StopSyncing()
 		IsEmpty() bool
+		IsExpectingEpoch(epoch common.EpochNum) error
 		GetCurrentHeight() common.Height
 		SetCurrentHeight(height common.Height)
 		SetCurrentToHeight(height common.Height, hob common.Hash) error
 
 		GetWorldStateRoot() ([]byte, error)
 		SnapshotRoots() (snapshot *ChainSnapshot, err error)
-		// GetWorldStateStream(height common.Height, stateRoot []byte, chainInfosRoot []byte, historyRoot []byte,
-		// 	vccRoot []byte, cashedRoot []byte) (stream []byte, vccs [][]byte, casheds [][]byte, err error)
 		GetWorldStateStream(snapshot *ChainSnapshot) (accStream [][]byte,
 			stoStream [][]byte, codeStream [][]byte, longStream [][]byte, deltaStream [][]byte, chainsStream []byte, err error)
 		GetCashCheckState(vccRoot, cashedRoot []byte) (vccs, casheds [][]byte, err error)
@@ -186,6 +187,7 @@ type (
 
 		GetAccount(addr *common.Address) (*Account, bool)
 		GetCodeByHash(codeHash common.Hash) []byte
+		GetGasSettings() (gasPrice *big.Int, gasLimit uint64)
 
 		SwitchEpoch()
 		HasChild() bool
@@ -406,7 +408,8 @@ type (
 )
 
 func (ss *ChainSnapshot) String() string {
-	return fmt.Sprintf("Snapshot{Height:%d Waterlines:%s Block:{%s}}", ss.Height, ss.Waterlines, ss.Block.InfoString())
+	return fmt.Sprintf("Snapshot{Height:%d Waterlines:%s Block:{%s} CheckEpoch:%t}",
+		ss.Height, ss.Waterlines, ss.Block.InfoString(), ss.CheckEpoch)
 }
 
 func (ww *WholeWorld) String() string {

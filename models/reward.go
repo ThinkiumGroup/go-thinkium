@@ -252,10 +252,12 @@ type (
 		// since v1.5.0。Used to record a total of valid pledged consensus nodes, only valid
 		// when Type==common.Consensus, others are 0
 		NodeCount uint32
+		// node status
+		Status uint16
 	}
 
 	// To be compatible with the old Hash value
-	rrInfoMapper struct {
+	rrInfoMapperV0 struct {
 		NodeIDHash     common.Hash
 		Height         common.Height
 		Type           common.NodeType
@@ -266,43 +268,23 @@ type (
 		RewardAddr     common.Address
 	}
 
-	RRInfoShouldBe struct {
-		// The hash value of the NodeID of the node is used to store information in a more
-		// private way. It can also reduce storage capacity
-		NodeIDHash common.Hash
-		// The main chain block height at the time of the last deposit
-		Height common.Height
-		// Which type of node, supports common.Consensus/common.Data
-		Type common.NodeType
-		// TODO: Node status, such as: normal status, locked status (staking and redemption
-		//  operations are not allowed, but elections are allowed), suspended status (the
-		//  entire account is not allowed to operate, nor does it participate in elections), etc.
-		Status uint16
-		// If it is not nil, it means that this deposit has been applied for withdrawing and
-		// will no longer participate in the calculation. When the value >= the cycle currently
-		// being calculated, execute the withdrawing
+	rrInfoMapperV1 struct {
+		NodeIDHash     common.Hash
+		Height         common.Height
+		Type           common.NodeType
 		WithdrawDemand *common.EraNum
-		// Record the number of penalties, initially 0, +1 after each Penalty execution
 		PenalizedTimes int
-		// Pledge amount (the total pledge amount of this node, >= effective pledge amount)
-		Amount *big.Int
-		// The percentage of the effective pledge amount of the current node in the total
-		// effective pledge. If it is nil, it indicates that the current pledge does not
-		// account for the proportion. It may be waiting for withdrawing at this time.
-		Ratio *big.Rat
-		// Reward binding address
-		RewardAddr common.Address
-		// Since v1.3.4. When WithdrawDemand!=nil, record all pending withdrawing records. If it
-		// exists, the withdrawing due in the list will be executed every era.
-		Withdrawings Withdrawings
-		// since v1.5.0。Used to record a total of valid pledged consensus nodes, only valid
-		// when Type==common.Consensus, others are 0
-		NodeCount uint32
+		Amount         *big.Int
+		Ratio          *big.Rat
+		RewardAddr     common.Address
+		Withdrawings   Withdrawings
+		Version        uint16
+		NodeCount      uint32
 	}
 )
 
-// RRInfoVersion:1: NodeCount added
-const RRInfoVersion = 1
+// RRInfoVersion:1: NodeCount, 2: statue
+const RRInfoVersion = 2
 
 func CreateGenesisRRInfo(nodeIdHash common.Hash, nodeType common.NodeType) (*RRInfo, error) {
 	amount := MinConsensusRRBig
@@ -324,6 +306,8 @@ func CreateGenesisRRInfo(nodeIdHash common.Hash, nodeType common.NodeType) (*RRI
 		RewardAddr:     AddressOfRewardForGenesis,
 		Withdrawings:   nil,
 		Version:        RRInfoVersion,
+		NodeCount:      0,
+		Status:         0x1,
 	}, nil
 }
 
@@ -341,7 +325,8 @@ func (r *RRInfo) InfoEquals(v *RRInfo) bool {
 		r.PenalizedTimes != v.PenalizedTimes ||
 		// r.RewardAddr != v.RewardAddr {
 		r.RewardAddr != v.RewardAddr ||
-		r.Version != v.Version {
+		r.Version != v.Version ||
+		r.Status != v.Status {
 		return false
 	}
 
@@ -459,9 +444,9 @@ func (r *RRInfo) String() string {
 		return "RR<nil>"
 	}
 	return fmt.Sprintf("RR.%d{NIDH:%x LastHeight:%d Type:%s Withdraw:%s(%s) Penalized:%d "+
-		"Amount:%s Addr:%x Ratio:%s NC:%d}",
+		"Amount:%s Addr:%x Ratio:%s NC:%d Status:%d}",
 		r.Version, r.NodeIDHash[:5], r.Height, r.Type, r.WithdrawDemand, r.Withdrawings,
-		r.PenalizedTimes, math.BigIntForPrint(r.Amount), r.RewardAddr[:5], r.Ratio, r.NodeCount)
+		r.PenalizedTimes, math.BigIntForPrint(r.Amount), r.RewardAddr[:5], r.Ratio, r.NodeCount, r.Status)
 }
 
 func (r *RRInfo) Key() []byte {
@@ -501,6 +486,7 @@ func (r *RRInfo) Clone() *RRInfo {
 		Withdrawings:   r.Withdrawings.Clone(),
 		Version:        r.Version,
 		NodeCount:      r.NodeCount,
+		Status:         r.Status,
 	}
 }
 
@@ -547,23 +533,113 @@ func (r *RRInfo) AvailableAmount(nodeType common.NodeType) *big.Int {
 
 func (r *RRInfo) HashValue() ([]byte, error) {
 	if config.SystemConf.IsCompatible() == false || // specify incompatible old data
-		// r == nil || r.Withdrawings != nil || r.NodeCount != 0 {
 		r == nil ||
-		r.Version > 0 {
+		r.Version == RRInfoVersion {
 		return common.EncodeAndHash(r)
 	}
 	// compatible with old data
-	m := &rrInfoMapper{
-		NodeIDHash:     r.NodeIDHash,
-		Height:         r.Height,
-		Type:           r.Type,
-		WithdrawDemand: r.WithdrawDemand,
-		PenalizedTimes: r.PenalizedTimes,
-		Amount:         r.Amount,
-		Ratio:          r.Ratio,
-		RewardAddr:     r.RewardAddr,
+	switch r.Version {
+	case 0:
+		m := &rrInfoMapperV0{
+			NodeIDHash:     r.NodeIDHash,
+			Height:         r.Height,
+			Type:           r.Type,
+			WithdrawDemand: r.WithdrawDemand,
+			PenalizedTimes: r.PenalizedTimes,
+			Amount:         r.Amount,
+			Ratio:          r.Ratio,
+			RewardAddr:     r.RewardAddr,
+		}
+		return common.EncodeAndHash(m)
+	case 1:
+		m := &rrInfoMapperV1{
+			NodeIDHash:     r.NodeIDHash,
+			Height:         r.Height,
+			Type:           r.Type,
+			WithdrawDemand: r.WithdrawDemand,
+			PenalizedTimes: r.PenalizedTimes,
+			Amount:         r.Amount,
+			Ratio:          r.Ratio,
+			RewardAddr:     r.RewardAddr,
+			Withdrawings:   r.Withdrawings,
+			Version:        r.Version,
+			NodeCount:      r.NodeCount,
+		}
+		return common.EncodeAndHash(m)
 	}
-	return common.EncodeAndHash(m)
+	return common.EncodeAndHash(r)
+}
+
+type RRStatusAct big.Int
+
+var (
+	maxRRStatusAct = big.NewInt(math.MaxUint16)
+	minRRStatusAct = big.NewInt(-math.MaxUint16)
+)
+
+func (a *RRStatusAct) Ignored() bool {
+	if a == nil || (*big.Int)(a).Sign() == 0 {
+		return true
+	}
+	if (*big.Int)(a).Cmp(minRRStatusAct) < 0 || (*big.Int)(a).Cmp(maxRRStatusAct) > 0 {
+		return true
+	}
+	return false
+}
+
+func (a *RRStatusAct) Todo() (act uint16, setOrClr bool) {
+	if a.Ignored() {
+		return 0, true
+	}
+	bi := (*big.Int)(a)
+	if bi.Sign() > 0 {
+		return uint16(bi.Uint64()), true
+	}
+	return uint16(-bi.Int64()), false
+}
+
+func (a *RRStatusAct) Merge(b *RRStatusAct) error {
+	if a.Ignored() || b.Ignored() {
+		return errors.New("ignored action could not be merged")
+	}
+	aact, asc := a.Todo()
+	bact, bsc := b.Todo()
+	if asc != bsc {
+		return errors.New("different action could not be merged")
+	}
+	n := int64(aact | bact)
+	if !asc {
+		n = -n
+	}
+	(*big.Int)(a).SetInt64(n)
+	return nil
+}
+
+type RRStatus uint16
+
+func (s RRStatus) Change(value *big.Int) (newStatus RRStatus, msg string, changed bool) {
+	act := (*RRStatusAct)(value)
+	if act.Ignored() {
+		return s, "", false
+	}
+
+	actValue, setOrClr := act.Todo()
+	if setOrClr {
+		msg = "SET"
+		newValue := uint16(s) | actValue
+		return RRStatus(newValue), msg, newValue != uint16(s)
+	} else {
+		msg = "CLR"
+		newValue := uint16(s) & ^actValue
+		return RRStatus(newValue), msg, newValue != uint16(s)
+	}
+}
+
+func (s RRStatus) Match(bits uint16) bool {
+	if bits == 0 {
+		return false
+	}
+	return uint16(s)&bits == bits
 }
 
 // Required Reserve Act Type
@@ -573,8 +649,11 @@ const (
 	RRADeposit  RRAType = iota // Deposit
 	RRAPenalty                 // Confiscation deposit
 	RRAWithdraw                // Withdraw
+	RRAStatus                  // NewStatus>0: RRInfo.Status |= uint16(NewStatus), NewStatus<0:RRInfo.Status &= (^uint16(-NewStatus))
 	RRAMax                     // The valid value must be less than this value
 )
+
+var AllRRATypes = []RRAType{RRADeposit, RRAPenalty, RRAWithdraw, RRAStatus}
 
 func (t RRAType) String() string {
 	switch t {
@@ -584,6 +663,8 @@ func (t RRAType) String() string {
 		return "PEN"
 	case RRAWithdraw:
 		return "W/D"
+	case RRAStatus:
+		return "STATUS"
 	default:
 		return "NA"
 	}
@@ -593,29 +674,30 @@ func (t RRAType) Valid() bool {
 	return t < RRAMax
 }
 
-func (t RRAType) Compatible(typ RRAType) bool {
-	if typ >= RRAMax {
-		return false
-	}
-	switch t {
-	case RRADeposit:
-		return true
-	case RRAWithdraw:
-		if typ == RRAPenalty || typ == RRAWithdraw {
-			// A withdrawing request has been initiated, and punishment and withdrawing can be
-			// executed in the same era (withdrawings are combineda into one).
-			// In actual processing, the deposit is executed first, followed by punishment, and
-			// finally withdrawing
-			return true
-		}
-		return false
-	case RRAPenalty:
-		// No additional actions are allowed in the same era after a penalty
-		return false
-	default:
-		return false
-	}
-}
+//
+// func (t RRAType) Compatible(typ RRAType) bool {
+// 	if typ >= RRAMax {
+// 		return false
+// 	}
+// 	switch t {
+// 	case RRADeposit:
+// 		return true
+// 	case RRAWithdraw:
+// 		if typ == RRAPenalty || typ == RRAWithdraw {
+// 			// A withdrawing request has been initiated, and punishment and withdrawing can be
+// 			// executed in the same era (withdrawings are combineda into one).
+// 			// In actual processing, the deposit is executed first, followed by punishment, and
+// 			// finally withdrawing
+// 			return true
+// 		}
+// 		return false
+// 	case RRAPenalty:
+// 		// No additional actions are allowed in the same era after a penalty
+// 		return false
+// 	default:
+// 		return false
+// 	}
+// }
 
 // Compare the priority of the two types, the higher the priority of the execution order, the
 // smaller the Compare, the higher the execution priority
@@ -714,11 +796,18 @@ func (rr *RRC) Key() []byte {
 }
 
 // Check the modification to the same node, whether its nodeid/bindaddr and nodeType are the same
-func (rr *RRC) Compatible(nodeIdHash common.Hash, typ common.NodeType, addr common.Address) bool {
-	if rr.Typ == common.NoneNodeType || typ == common.NoneNodeType {
-		return nodeIdHash == rr.NodeIDHash && addr == rr.Addr
+func (rr *RRC) Compatible(nodeIdHash common.Hash, typ common.NodeType, addr common.Address, actType RRAType) bool {
+	if actType == RRAStatus {
+		if rr.Typ == common.NoneNodeType || typ == common.NoneNodeType {
+			return nodeIdHash == rr.NodeIDHash
+		}
+		return nodeIdHash == rr.NodeIDHash && typ == rr.Typ
+	} else {
+		if rr.Typ == common.NoneNodeType || typ == common.NoneNodeType {
+			return nodeIdHash == rr.NodeIDHash && addr == rr.Addr
+		}
+		return nodeIdHash == rr.NodeIDHash && typ == rr.Typ && addr == rr.Addr
 	}
-	return nodeIdHash == rr.NodeIDHash && typ == rr.Typ && addr == rr.Addr
 }
 
 // Calculate the change value of the node pledge in Changing, which can be a negative number. If
@@ -790,11 +879,19 @@ func (rr *RRC) MergeActs() {
 	if len(rr.Acts) == 0 {
 		return
 	}
+	newacts := make([]*RRAct, 0, len(rr.Acts))
 	m := make(map[RRAType]*RRAct)
 	for _, act := range rr.Acts {
 		if act == nil {
 			continue
 		}
+
+		if act.Typ == RRAStatus {
+			// status change actions are not merged
+			newacts = append(newacts, act.Clone())
+			continue
+		}
+
 		old, exist := m[act.Typ]
 		if exist && old != nil {
 			// Already exists, merge
@@ -814,7 +911,6 @@ func (rr *RRC) MergeActs() {
 		}
 	}
 
-	newacts := make([]*RRAct, 0, len(m))
 	setter := func(typ RRAType) {
 		act, exist := m[typ]
 		if !exist || act == nil {
@@ -822,9 +918,9 @@ func (rr *RRC) MergeActs() {
 		}
 		newacts = append(newacts, act)
 	}
-	setter(RRADeposit)
-	setter(RRAPenalty)
-	setter(RRAWithdraw)
+	for _, typ := range AllRRATypes {
+		setter(typ)
+	}
 
 	if config.IsLogOn(config.DataDebugLog) {
 		log.Debugf("[RR] MergeActs(NIH:%x Addr:%x Typ:%s): %s -> %s", rr.NodeIDHash[:5], rr.Addr[:5], rr.Typ,
@@ -866,6 +962,9 @@ func (rr *RRC) ApplyTo(info *RRInfo, stateDB StateDB) (
 	}
 	// sort
 	sort.Slice(acts, func(i, j int) bool {
+		if acts[i].Typ.Compare(acts[j].Typ) == 0 {
+			return acts[i].Height.Compare(acts[j].Height) < 0
+		}
 		return acts[i].Typ.Compare(acts[j].Typ) < 0
 	})
 	for _, act := range acts {
@@ -927,7 +1026,7 @@ func (rr *RRC) ApplyTo(info *RRInfo, stateDB StateDB) (
 			// If newinfo == nil, it will not be processed. It may be a penalty for confiscating
 			// the money and failing to withdraw cash.
 			if newinfo == nil {
-				log.Warnf("[RR] %s ignored cause of no RRInfo found", rr)
+				log.Warnf("[RR] %s ignored cause of no RRInfo found", act)
 			} else {
 				// if newinfo != nil {
 				withdrawEra := act.Height.EraNum() + WithdrawDelayEras
@@ -962,6 +1061,29 @@ func (rr *RRC) ApplyTo(info *RRInfo, stateDB StateDB) (
 				changed = true
 				if config.IsLogOn(config.DataDebugLog) {
 					log.Debugf("[RR] withdrawing %s applied, %s", act, newinfo)
+				}
+			}
+		case RRAStatus:
+			if newinfo == nil {
+				log.Warnf("[RR] %s ignored cause of no RRInfo found", act)
+			} else {
+				shouldRemove = false
+				var newStatus, oldStatus RRStatus
+				var msg string
+				oldStatus = RRStatus(newinfo.Status)
+				newStatus, msg, changed = oldStatus.Change(act.Amount)
+
+				if msg == "" {
+					if config.IsLogOn(config.DataDebugLog) {
+						log.Debugf("[RR] NewStatus==%s, ignored", act.Amount)
+					}
+				} else {
+					if changed {
+						newinfo.Status = uint16(newStatus)
+					}
+					if config.IsLogOn(config.DataDebugLog) {
+						log.Debugf("[RR] oldStatus(%d) %s newStatus(%s) -> %s", oldStatus, msg, act.Amount, newinfo)
+					}
 				}
 			}
 		default:
