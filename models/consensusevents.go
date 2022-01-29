@@ -15,7 +15,6 @@
 package models
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"math/big"
@@ -247,6 +246,8 @@ type AttendanceRecord struct {
 	Attendance *big.Int        // Indicates by bit whether the corresponding data block is empty, Attendance.Bit(BlockNum)==1 is normal block and ==0 is empty block
 	DataNodes  common.NodeIDs  // List of datanode nodeid in ascending order
 	Stats      []int           // Stats of alive data nodes
+
+	nodeIdxs map[common.NodeID]int // cache data node id -> index of Stats
 }
 
 func NewAttendanceRecord(epoch common.EpochNum, dataNodes ...common.NodeID) *AttendanceRecord {
@@ -398,10 +399,20 @@ func (a *AttendanceRecord) dataNodeIdx(nid common.NodeID) int {
 	if a == nil {
 		return -1
 	}
-	for i, id := range a.DataNodes {
-		if bytes.Equal(id[:], nid[:]) {
-			return i
+	// cache
+	if a.nodeIdxs == nil {
+		a.nodeIdxs = make(map[common.NodeID]int)
+		for i, id := range a.DataNodes {
+			a.nodeIdxs[id] = i
 		}
+	}
+	// for i, id := range a.DataNodes {
+	// 	if id == nid {
+	// 		return i
+	// 	}
+	// }
+	if i, exist := a.nodeIdxs[nid]; exist {
+		return i
 	}
 	return -1
 }

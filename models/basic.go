@@ -1463,6 +1463,16 @@ func NewEpochComm(result *Committee, current *Committee) *EpochCommittee {
 	}
 }
 
+func (c *EpochCommittee) IsEmpty() bool {
+	if c == nil {
+		return true
+	}
+	if c.Result.Size() == 0 && c.Real.Size() == 0 {
+		return true
+	}
+	return false
+}
+
 func (c *EpochCommittee) Clone() *EpochCommittee {
 	if c == nil {
 		return nil

@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package rpcserver;
 
+option go_package = ".;rpcserver";
+
 service node {
     rpc Ping(RpcRequest) returns (RpcResponse);
     rpc GetAccount(RpcAddress) returns (RpcResponse);

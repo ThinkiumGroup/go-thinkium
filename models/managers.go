@@ -20,7 +20,6 @@ import (
 	"math/big"
 	"net"
 	"reflect"
-	"sync"
 
 	"github.com/ThinkiumGroup/go-common"
 	"github.com/ThinkiumGroup/go-common/db"
@@ -238,7 +237,7 @@ type (
 
 		// interface for check nodes
 		CacheAliveDataNode(id common.NodeID, height common.Height)
-		LoadAliveDataNodes() sync.Map
+		LoadAliveDataNodes() common.NodeIDs
 		ClearAliveDataNodes(height common.Height)
 	}
 

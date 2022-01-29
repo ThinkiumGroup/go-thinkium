@@ -29,14 +29,14 @@ import (
 )
 
 const (
-	MaxPenalizedTime  = 3     // After the penalty exceeds this number of times, the pledge percentage is cleared to 0
-	WithdrawDelayEras = 2     // Withdraw lags 2 eras
-	MinConsensusRR    = 10000 // Lower limit of consensus node pledges, (202012: from 50000->10000）
-	MaxConsensusRR    = 10000 // The consensus node pledges is calculated at most according to this，(202012: from 50000->10000)
-	ConsensusRRUnit   = 1000  // each rr unit a consensus node pledge has, get a unit reward. Consensus.(Node.RR/RRUnit*UnitReward)
-	MinDataRR         = 50000 // Lower limit of data node pledges, (202012: from 200000->50000）
-	MaxDataRR         = 50000 // The data node pledges is calculated at most according to this, (202012: from 200000->50000）
-	DataRRUnit        = 50000 // each rr unit a data node pledge has, get a unit reward. DataNode.(Node.RR/RRUnit*UnitReward)
+	MaxPenalizedTime  = 3      // After the penalty exceeds this number of times, the pledge percentage is cleared to 0
+	WithdrawDelayEras = 2      // Withdraw lags 2 eras
+	MinConsensusRR    = 10000  // Lower limit of consensus node pledges, (202012: from 50000->10000）
+	MaxConsensusRR    = 10000  // The consensus node pledges is calculated at most according to this，(202012: from 50000->10000)
+	ConsensusRRUnit   = 1000   // each rr unit a consensus node pledge has, get a unit reward. Consensus.(Node.RR/RRUnit*UnitReward)
+	MinDataRR         = 50000  // Lower limit of data node pledges, (202012: from 200000->50000）
+	MaxDataRR         = 500000 // The data node pledges is calculated at most according to this, (202012: from 200000->50000, 202101: from 50000->500000）
+	DataRRUnit        = 50000  // each rr unit a data node pledge has, get a unit reward. DataNode.(Node.RR/RRUnit*UnitReward)
 
 	MinRewardBalance = 100000 // A balance limit of reward account to stop process reward request
 )

@@ -46,6 +46,8 @@ type RPCServer struct {
 	engine   models.Engine
 	eventer  models.Eventer
 	logger   logrus.FieldLogger
+
+	UnimplementedNodeServer
 }
 
 func NewRPCServer(local common.Endpoint, nmanager models.NetworkManager, dmanager models.DataManager, engine models.Engine,

@@ -364,6 +364,12 @@ func SaveNextCommittee(dbase db.Database, chainId common.ChainID, nextEpoch comm
 }
 
 func SaveEpochCommittee(dbase db.Writer, chainId common.ChainID, nextEpoch common.EpochNum, ec *models.EpochCommittee) error {
+	if ec.IsEmpty() {
+		if config.IsLogOn(config.DataLog) {
+			log.Warnf("ignoring SaveEpochCommitte(ChainID:%d, Epoch:%d, %s) which is empty", chainId, nextEpoch, ec)
+		}
+		return nil
+	}
 	if bytes, err := rtl.Marshal(ec); err != nil {
 		return err
 	} else {

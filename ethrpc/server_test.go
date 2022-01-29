@@ -11,7 +11,7 @@ import (
 )
 
 func TestRunEthRpc(t *testing.T) {
-	conf, err := config.LoadConfig("../start/mchainconfs/gtkm0.yaml")
+	conf, err := config.LoadConfig("../start/mchainconfs/dvpp0.yaml")
 	models.ETHSigner = models.NewLondonSigner()
 	if err != nil {
 		t.Errorf(err.Error())
